@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+
+
+import nmap
+import time
+import json
+import argparse
+from metasploit.msfrpc import MsfRpcClient
+
+# Replace with your Metasploit RPC credentials and IP address
+MSF_RPC_USER = 'msf'
+MSF_RPC_PASS = 'password'
+MSF_RPC_IP = '127.0.0.1'
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Network scanning script')
+    parser.add_argument('-t', '--target', help='Target IP range (default: 192.168.1.0/24)', default='192.168.1.0/24')
+    return parser.parse_args()
+
+def network_scan(target_range):
+    nm = nmap.PortScanner()
+    nm.scan(hosts=target_range, arguments='-sn')
+    hosts_list = [(x, nm[x]['status']['state']) for x in nm.all_hosts()]
+    return hosts_list
+
+def port_scan(host):
+    nm = nmap.PortScanner()
+    nm.scan(host, arguments='-p 1-65535 -sV')
+    open_ports = [(x, nm[host]['tcp'][x]['name'], nm[host]['tcp'][x]['product'], nm[host]['tcp'][x]['version']) for x in nm[host]['tcp'] if nm[host]['tcp'][x]['state'] == 'open']
+    return open_ports
+
+def metasploit_scan(host, port):
+    client = MsfRpcClient(MSF_RPC_PASS, username=MSF_RPC_USER, server=MSF_RPC_IP)
+    exploit = client.modules.use('auxiliary', 'scanner/portscan/tcp')
+    exploit['RHOSTS'] = host
+    exploit['THREADS'] = 10
+    exploit['PORTS'] = port
+    exploit.execute()
+    time.sleep(5)
+    vulns = client.jobs.list[0]['result']
+    return vulns
+
+def log_results(filename, results):
+    with open(filename, 'w') as f:
+        json.dump(results, f, indent=4)
+
+if __name__ == '__main__':
+    args = parse_args()
+    hosts = network_scan(args.target)
+    results = []
+
+    for host, state in hosts:
+        if state == 'up':
+            open_ports = port_scan(host)
+            host_results = {'host': host, 'ports': []}
+
+            for port, service, product, version in open_ports:
+                vulns = metasploit_scan(host, port)
+                port_results = {
+                    'port': port,
+                    'service': service,
+                    'product': product,
+                    'version': version,
+                    'vulnerabilities': vulns
+                }
+                host_results['ports'].append(port_results)
+                print(f"Host: {host} | Port: {port} | Service: {service} | Product: {product} | Version: {version} | Vulnerabilities: {vulns}")
+    results.append(host_results)
+
+log_results('scan_results.json', results)
+           
